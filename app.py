@@ -12,7 +12,7 @@ def load_model():
 model = load_model()
 
 # Load class names (same order as during training)
-CLASS_NAMES = ['cat', 'dog', 'deer', 'elephant']  # 🔹 Replace with your actual class names
+CLASS_NAMES = ['canid', 'cervid', 'felid', 'mustelid','ursid']  # 🔹 Replace with your actual class names
 
 # App title
 st.title("🐾 Animal Footprint Detection")
