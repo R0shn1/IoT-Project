@@ -253,5 +253,5 @@ def plot_combined_history(h1, h2):
 plot_combined_history(history_initial, history_finetune)
 # --- Re-export clean model for compatibility ---
 import keras
-model.save("animal_footprint_clean.keras", save_format="keras_v3")
+model.save("animal_footprint_cleaned.keras", save_format="keras_v3")
 print("✅ Cleaned model exported successfully as 'animal_footprint_clean.keras'")
