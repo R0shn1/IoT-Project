@@ -8,7 +8,7 @@ from PIL import Image
 # ---------------------------
 @st.cache_resource
 def load_model():
-    model = tf.keras.models.load_model("animal_footprint_optimized_v9_refined.keras")  # change filename if needed
+    model = tf.keras.models.load_model("animal_footprint_best.keras")  # change filename if needed
     return model
 
 model = load_model()

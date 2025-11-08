@@ -10,19 +10,19 @@ from sklearn.utils.class_weight import compute_class_weight
 # =========================
 # CONFIGURATION
 # =========================
-data_dir = r"C:\Users\HP\Desktop\Animal footprint tracker\train"            # your original dataset folder
-split_dir = r"C:\Users\HP\Desktop\Animal footprint tracker\train_split"     # new folder for auto-split data
+data_dir = r"C:\Users\HP\Desktop\Animal footprint tracker\train"
+split_dir = r"C:\Users\HP\Desktop\Animal footprint tracker\train_split"
 img_size = (224, 224)
 batch_size = 32
-epochs_initial = 15
-epochs_finetune = 30
-num_unfreeze_layers = 20
-USE_CLASS_WEIGHTS = False   # Set True if classes are highly imbalanced
+epochs_initial = 20
+epochs_finetune = 50
+num_unfreeze_layers = 50
+USE_CLASS_WEIGHTS = True   # ✅ use class weights to handle imbalance
 
 # =========================
 # AUTO SPLIT (80% train, 20% val)
 # =========================
-print("Preparing stratified data split...")
+print("📂 Preparing stratified data split...")
 
 try:
     import splitfolders
@@ -30,12 +30,11 @@ except ImportError:
     os.system("pip install split-folders")
     import splitfolders
 
-# Perform the split only once
 if not os.path.exists(os.path.join(split_dir, "train")):
     splitfolders.ratio(
         data_dir,
         output=split_dir,
-        seed=123,
+        seed=42,
         ratio=(0.8, 0.2)
     )
     print("✅ Split created at:", split_dir)
@@ -45,7 +44,7 @@ else:
 # =========================
 # LOAD DATASETS
 # =========================
-print("\nLoading datasets...")
+print("\n📦 Loading datasets...")
 
 train_ds = image_dataset_from_directory(
     os.path.join(split_dir, "train"),
@@ -62,13 +61,13 @@ val_ds_metrics = image_dataset_from_directory(
 )
 
 class_names = train_ds.class_names
-print("Detected Classes:", class_names)
+print("✅ Detected Classes:", class_names)
 
 # Extract labels for class weighting
 train_labels = np.concatenate([y.numpy() for x, y in train_ds])
 
-# Prefetch for performance
-train_ds_fit = train_ds.cache().prefetch(buffer_size=tf.data.AUTOTUNE)
+# Prefetch for better performance
+train_ds_fit = train_ds.cache().shuffle(1000).prefetch(buffer_size=tf.data.AUTOTUNE)
 val_ds_fit = val_ds_metrics.cache().prefetch(buffer_size=tf.data.AUTOTUNE)
 
 # =========================
@@ -76,7 +75,7 @@ val_ds_fit = val_ds_metrics.cache().prefetch(buffer_size=tf.data.AUTOTUNE)
 # =========================
 class_weights = None
 if USE_CLASS_WEIGHTS:
-    print("\nCalculating class weights...")
+    print("\n⚖️ Calculating class weights...")
     classes = np.unique(train_labels)
     weights = compute_class_weight(
         class_weight='balanced',
@@ -84,30 +83,29 @@ if USE_CLASS_WEIGHTS:
         y=train_labels
     )
     class_weights = dict(zip(classes, weights))
-    print("Computed class weights:", class_weights)
+    print("✅ Computed class weights:", class_weights)
 
 # =========================
 # MODEL ARCHITECTURE
 # =========================
-print("\nBuilding model...")
+print("\n🔧 Building model...")
 
 data_augmentation = tf.keras.Sequential([
     layers.RandomFlip("horizontal"),
-    layers.RandomRotation(0.15),
-    layers.RandomZoom(0.2),
+    layers.RandomRotation(0.2),
+    layers.RandomZoom(0.25),
     layers.RandomContrast(0.2),
     layers.RandomBrightness(0.2),
-    layers.RandomTranslation(height_factor=0.1, width_factor=0.1)
+    layers.RandomTranslation(0.15, 0.15)
 ])
-
 
 base_model = tf.keras.applications.MobileNetV2(
     input_shape=img_size + (3,),
     include_top=False,
     weights='imagenet',
-    alpha=0.75
+    alpha=1.0   # stronger backbone
 )
-base_model.trainable = False  # freeze base for stage 1
+base_model.trainable = False
 
 inputs = layers.Input(shape=img_size + (3,))
 x = data_augmentation(inputs)
@@ -122,7 +120,7 @@ model = models.Model(inputs, outputs)
 # =========================
 # STAGE 1: INITIAL TRAINING
 # =========================
-print("\n--- Stage 1: Training top layers ---\n")
+print("\n🚀 Stage 1: Training top layers...")
 
 initial_learning_rate = 1e-3
 lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
@@ -134,13 +132,13 @@ lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
 
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule),
-    loss='sparse_categorical_crossentropy',
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(),
     metrics=['accuracy']
 )
 
 callback_initial = tf.keras.callbacks.EarlyStopping(
     monitor='val_accuracy',
-    patience=3,
+    patience=4,
     restore_best_weights=True
 )
 
@@ -155,21 +153,21 @@ history_initial = model.fit(
 # =========================
 # STAGE 2: FINE-TUNING
 # =========================
-print(f"\n--- Stage 2: Fine-tuning last {num_unfreeze_layers} layers ---\n")
+print(f"\n🔁 Stage 2: Fine-tuning last {num_unfreeze_layers} layers...")
 
 base_model.trainable = True
 for layer in base_model.layers[:-num_unfreeze_layers]:
     layer.trainable = False
 
 model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=5e-6),
-    loss='sparse_categorical_crossentropy',
+    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(),
     metrics=['accuracy']
 )
 
 callback_finetune = tf.keras.callbacks.EarlyStopping(
     monitor='val_accuracy',
-    patience=8,
+    patience=10,
     restore_best_weights=True
 )
 
@@ -184,29 +182,28 @@ history_finetune = model.fit(
 )
 
 # =========================
-# SAVE CLEAN INFERENCE MODEL
+# SAVE CLEAN MODEL
 # =========================
 inference_model = tf.keras.Model(inputs=model.input, outputs=model.output)
-inference_model.save("animal_footprint_inference.keras")
-print("✅ Saved inference-ready model (no data augmentation).")
+inference_model.save("animal_footprint_best.keras")
+print("✅ Model saved as 'animal_footprint_best.keras'")
 
 # =========================
-# FINAL EVALUATION
+# EVALUATION & REPORTS
 # =========================
-print("\n--- Final Evaluation and Metrics ---\n")
+print("\n📊 Evaluating model...")
 
 val_metrics = model.evaluate(val_ds_metrics)
-print(f"\nFinal Validation Loss: {val_metrics[0]:.4f}")
-print(f"Final Validation Accuracy: {val_metrics[1]:.4f}")
+print(f"\n✅ Final Validation Loss: {val_metrics[0]:.4f}")
+print(f"✅ Final Validation Accuracy: {val_metrics[1]:.4f}")
 
-# Predictions for sklearn metrics
 y_true = np.concatenate([y.numpy() for x, y in val_ds_metrics])
 y_pred_probs = model.predict(val_ds_metrics)
 y_pred_labels = np.argmax(y_pred_probs, axis=1)
 
-print("\n" + "="*50)
+print("\n" + "="*60)
 print("Classification Report (Precision, Recall, F1-Score)")
-print("="*50)
+print("="*60)
 print(classification_report(
     y_true,
     y_pred_labels,
@@ -215,16 +212,15 @@ print(classification_report(
     digits=3
 ))
 
-print("\n" + "="*50)
-print("Confusion Matrix (Rows=True, Cols=Predicted)")
-print("="*50)
+print("\n" + "="*60)
+print("Confusion Matrix")
+print("="*60)
 cm = confusion_matrix(y_true, y_pred_labels)
 print(cm)
-print(f"\nClass Order: {class_names}")
 
-# Save final model
-model.save("animal_footprint_optimized_v9_refined.keras")
-print("\n✅ Model saved as 'animal_footprint_optimized_v9_refined.keras'")
+per_class_acc = cm.diagonal() / cm.sum(axis=1)
+for i, cls in enumerate(class_names):
+    print(f"{cls}: {per_class_acc[i]*100:.2f}% accuracy")
 
 # =========================
 # PLOT TRAINING CURVES
@@ -243,7 +239,7 @@ def plot_combined_history(h1, h2):
     plt.plot(hist.history.get('accuracy', []), label='Train Accuracy')
     plt.plot(hist.history.get('val_accuracy', []), label='Validation Accuracy')
     plt.axvline(x=len(h1.history.get('accuracy', [])) - 1, color='r', linestyle='--', label='Fine-tuning Start')
-    plt.title('Training & Fine-tuning Progress')
+    plt.title('Training + Fine-tuning Accuracy')
     plt.xlabel('Epochs')
     plt.ylabel('Accuracy')
     plt.legend()
@@ -251,7 +247,4 @@ def plot_combined_history(h1, h2):
     plt.show()
 
 plot_combined_history(history_initial, history_finetune)
-# --- Re-export clean model for compatibility ---
-import keras
-model.save("animal_footprint_cleaned.keras", save_format="keras_v3")
-print("✅ Cleaned model exported successfully as 'animal_footprint_clean.keras'")
+print("\n🎉 Training complete!")
